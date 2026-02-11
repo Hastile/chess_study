@@ -1,4 +1,3 @@
-// ./lib/services/database_helper.dart
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart';
@@ -23,19 +22,27 @@ class DatabaseHelper {
     var databasesPath = await getDatabasesPath();
     var path = join(databasesPath, "chessDB.sqlite");
 
+    // 폴더가 없으면 생성
     try {
       await Directory(dirname(path)).create(recursive: true);
     } catch (_) {}
 
-    // Assets에서 최신 데이터 읽기
-    ByteData data = await rootBundle.load(join("assets", "chessDB.sqlite"));
-    List<int> bytes = data.buffer.asUint8List(
-      data.offsetInBytes,
-      data.lengthInBytes,
-    );
+    // 2. DB 파일이 존재하지 않을 때만 Assets에서 복사 (최적화)
+    var file = File(path);
+    try {
+      // [수정] join 함수 대신 슬래시(/)를 사용한 문자열 직접 입력
+      ByteData data = await rootBundle.load("assets/chessDB.sqlite");
 
-    // 기존 파일이 있더라도 무조건 덮어쓰기 (flush: true)
-    await File(path).writeAsBytes(bytes, flush: true);
+      List<int> bytes = data.buffer.asUint8List(
+        data.offsetInBytes,
+        data.lengthInBytes,
+      );  
+
+      await file.writeAsBytes(bytes, flush: true);
+    } catch (e) {
+      print("Error copying database: $e");
+      rethrow; // 에러 발생 시 상위로 전파
+    }
 
     // 3. DB 열기
     return await openDatabase(path, readOnly: true);
@@ -45,13 +52,11 @@ class DatabaseHelper {
   Future<Map<String, dynamic>?> getOpeningByFen(String normalizedFen) async {
     final db = await database;
 
-    // positions 테이블에서 4파트 FEN으로 조회
-    // csv 구조에 맞춰 name_ko, name_en, eval을 가져옵니다.
     List<Map<String, dynamic>> maps = await db.query(
       'positions',
       columns: ['name_ko', 'name_en', 'eval'],
-      where: 'fen = ?',
-      whereArgs: [normalizedFen],
+      where: 'fen LIKE ?',
+      whereArgs: ['$normalizedFen%'],
     );
 
     if (maps.isNotEmpty) {

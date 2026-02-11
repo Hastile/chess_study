@@ -20,12 +20,12 @@ class _ChessBoardScreenState extends State<ChessBoardScreen> {
   int _selectedIndex = -1; // 현재 선택된 칸 인덱스 (0~63)
   List<String> _validMoves = []; // 선택된 말의 이동 가능 칸 (e.g., ['e3', 'e4'])
   String _currentFen =
-      "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -"; // 현재 포지션의 FEN 저장
+      "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq"; // 현재 포지션의 FEN 저장
   String _getNormalizedFen(String fen) {
     List<String> parts = fen.split(' ');
     // 0: 기물배치, 1: 턴, 2: 캐슬링권한, 3: 앙파상타겟
     // 뒤의 4, 5번(수치 데이터)은 오프닝 대조 시 방해가 될 수 있어 잘라냄
-    return parts.sublist(0, 4).join(' ');
+    return parts.sublist(0, 3).join(' ');
   }
 
   String _nameKo = "체스 시작";
@@ -93,6 +93,7 @@ class _ChessBoardScreenState extends State<ChessBoardScreen> {
       _historyPointer = 0;
       // _isFlipped는 리셋 시 유지하거나 false로 초기화 선택 가능
       _currentFen = _getNormalizedFen(_game.fen); // 초기 FEN 저장
+      _updateOpeningInfo(_currentFen);
     });
   }
 
@@ -203,6 +204,7 @@ class _ChessBoardScreenState extends State<ChessBoardScreen> {
         _historyPointer--;
         _game.load(_fenHistory[_historyPointer]);
         _currentFen = _getNormalizedFen(_game.fen); // FEN 동기화
+        _updateOpeningInfo(_currentFen);
         _clearSelection();
       });
     }
@@ -214,6 +216,7 @@ class _ChessBoardScreenState extends State<ChessBoardScreen> {
         _historyPointer++;
         _game.load(_fenHistory[_historyPointer]);
         _currentFen = _getNormalizedFen(_game.fen); // FEN 동기화
+        _updateOpeningInfo(_currentFen);
         _clearSelection();
       });
     }

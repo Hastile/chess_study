@@ -61,18 +61,15 @@ class InfoView extends StatelessWidget {
 
             // 평가치 바 (기존 동일)
             const SizedBox(height: 8),
-            _buildEvalBar(0.1), // 시작이니까 0에 가깝게
+            _buildEvalBar(evaluation),
             const SizedBox(height: 24),
 
             // (나머지 오프닝 정보 및 히스토리 UI는 이전과 동일하게 유지...)
-            const Text(
-              '체스 시작',
+            Text(
+              nameKo,
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
-            const Text(
-              'Start Position',
-              style: TextStyle(fontSize: 16, color: Colors.grey),
-            ),
+            Text(nameEn, style: TextStyle(fontSize: 16, color: Colors.grey)),
             const SizedBox(height: 24),
             const Divider(color: Colors.white10),
 
@@ -104,25 +101,35 @@ class InfoView extends StatelessWidget {
   }
 
   Widget _buildEvalBar(double eval) {
-    // eval: +값은 화이트 유리, -값은 블랙 유리
-    return Container(
-      height: 12,
-      width: double.infinity,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(6),
-        color: Colors.black, // 블랙 영역 (배경)
-      ),
-      child: FractionallySizedBox(
-        alignment: Alignment.centerLeft,
-        // 0.5(균형)를 기준으로 eval 수치에 따라 화이트 비중 조절
-        widthFactor: (0.5 + (eval / 40)).clamp(0.0, 1.0),
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(6),
-            color: Colors.white, // 확실하게 하얀색으로 변경
+  // 1. 목표가 되는 widthFactor를 먼저 계산합니다.
+  final double targetFactor = (0.5 + (eval / 40)).clamp(0.0, 1.0);
+
+  return Container(
+    height: 12,
+    width: double.infinity,
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(6),
+      color: Colors.black, // 블랙 영역 (배경)
+    ),
+    child: TweenAnimationBuilder<double>(
+      // 2. 애니메이션의 속도와 부드러움(Curve)을 설정합니다.
+      duration: const Duration(milliseconds: 400),
+      curve: Curves.easeInOutSine, // 시작과 끝이 부드러운 곡선
+      tween: Tween<double>(end: targetFactor),
+      builder: (context, value, child) {
+        return FractionallySizedBox(
+          alignment: Alignment.centerLeft,
+          // 3. 계산된 중간값(value)을 widthFactor에 적용합니다.
+          widthFactor: value,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(6),
+              color: Colors.white,
+            ),
           ),
-        ),
-      ),
-    );
-  }
+        );
+      },
+    ),
+  );
+}
 }
