@@ -1,6 +1,7 @@
 // ./lib/widgets/board_view.dart
 import 'package:flutter/material.dart';
 import 'package:chess/chess.dart' as chess_lib;
+import 'package:flutter_svg/flutter_svg.dart';
 
 class BoardView extends StatelessWidget {
   final chess_lib.Chess game;
@@ -8,6 +9,8 @@ class BoardView extends StatelessWidget {
   final int selectedIndex;
   final List<String> validMoves;
   final Function(int) onSquareTap;
+  final chess_lib.Move? lastMove;
+  final String? lastMoveType;
 
   const BoardView({
     super.key,
@@ -16,6 +19,8 @@ class BoardView extends StatelessWidget {
     required this.selectedIndex,
     required this.validMoves,
     required this.onSquareTap,
+    this.lastMove,
+    this.lastMoveType,
   });
 
   // 라이브러리의 기물 정보를 유저의 어셋 파일명으로 변환하는 헬퍼 함수
@@ -45,13 +50,15 @@ class BoardView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // 마지막 이동 정보 (하이라이트용)
-    final lastMove = game.history.isNotEmpty ? game.history.last.move : null;
+    final effectiveLastMove =
+        lastMove ?? (game.history.isNotEmpty ? game.history.last.move : null);
     int? lastFromIndex;
     int? lastToIndex;
+    // debugPrint(lastMoveType);
 
-    if (lastMove != null) {
-      lastFromIndex = _squareToIndex(lastMove.fromAlgebraic);
-      lastToIndex = _squareToIndex(lastMove.toAlgebraic);
+    if (effectiveLastMove != null) {
+      lastFromIndex = _squareToIndex(effectiveLastMove.fromAlgebraic);
+      lastToIndex = _squareToIndex(effectiveLastMove.toAlgebraic);
     }
 
     // 체크 상태인 킹 위치 찾기
@@ -109,6 +116,9 @@ class BoardView extends StatelessWidget {
 
                     // [Layer 3] 힌트 (이동 가능 표시, 캡처 링)
                     ..._buildMoveHints(squareSize),
+
+                    if (effectiveLastMove != null && lastMoveType != null)
+                      _buildMoveTypeIcon(squareSize, effectiveLastMove),
                   ],
                 );
               },
@@ -145,11 +155,11 @@ class BoardView extends StatelessWidget {
 
             // 하이라이트 우선순위: 체크 > 선택 > 마지막 이동
             if (displayIndex == checkKing) {
-              squareColor = const Color(0xFFE55C5C).withOpacity(0.9); // 체크
+              squareColor = const Color(0xFFE55C5C).withAlpha(229); // 체크
             } else if (displayIndex == selectedIndex) {
               squareColor = const Color(0xFFBBCB43); // 선택됨
             } else if (displayIndex == lastFrom || displayIndex == lastTo) {
-              squareColor = const Color(0xFFF5F682).withOpacity(0.8); // 마지막 이동
+              squareColor = const Color(0xFFF5F682).withAlpha(204); // 마지막 이동
             }
 
             return GestureDetector(
@@ -254,7 +264,7 @@ class BoardView extends StatelessWidget {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         border: Border.all(
-                          color: Colors.black.withOpacity(0.15),
+                          color: Colors.black.withAlpha(38),
                           width: squareSize * 0.1,
                         ),
                       ),
@@ -264,7 +274,7 @@ class BoardView extends StatelessWidget {
                       width: squareSize * 0.35,
                       height: squareSize * 0.35,
                       decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.15),
+                        color: Colors.black.withAlpha(38),
                         shape: BoxShape.circle,
                       ),
                     ),
@@ -274,5 +284,46 @@ class BoardView extends StatelessWidget {
       );
     }
     return hints;
+  }
+
+  Widget _buildMoveTypeIcon(double squareSize, chess_lib.Move lastMove) {
+    // 마지막 이동의 도착지점(to) 좌표 계산
+    int index = _squareToIndex(lastMove.toAlgebraic);
+    int row = index ~/ 8;
+    int col = index % 8;
+
+    if (isFlipped) {
+      row = 7 - row;
+      col = 7 - col;
+    }
+
+    return Positioned(
+      // 칸의 우측 상단에 배치
+      left: col * squareSize + (squareSize * 0.55), // 우측으로 치우치게
+      top: row * squareSize - (squareSize * 0.15), // 상단 경계에 걸치게 (살짝 튀어나오는 느낌)
+      width: squareSize * 0.45, // 아이콘 크기 (칸의 45%)
+      height: squareSize * 0.45,
+      child: IgnorePointer(
+        // 터치 무시
+        child: Container(
+          // 아이콘 가독성을 위한 그림자 효과 (선택 사항)
+          decoration: const BoxDecoration(
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black26,
+                blurRadius: 4,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+          child: SvgPicture.asset(
+            'assets/images/moves/$lastMoveType.svg',
+            // 파일이 없을 경우를 대비한 플레이스홀더
+            placeholderBuilder: (_) => const SizedBox(),
+          ),
+        ),
+      ),
+    );
   }
 }

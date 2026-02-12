@@ -1,10 +1,11 @@
 // ./lib/screen/chess_board_screen.dart
 import 'package:flutter/material.dart';
-import 'package:chess/chess.dart' as chess_lib; // 라이브러리 이름 충돌 방지
+import 'package:chess/chess.dart' as chess_lib;
 import 'package:audioplayers/audioplayers.dart';
 import '../widgets/board_view.dart';
 import '../widgets/info_view.dart';
 import '../services/database_helper.dart';
+import '../services/opening_service.dart';
 
 class ChessBoardScreen extends StatefulWidget {
   const ChessBoardScreen({super.key});
@@ -14,26 +15,24 @@ class ChessBoardScreen extends StatefulWidget {
 }
 
 class _ChessBoardScreenState extends State<ChessBoardScreen> {
-  // 1. 핵심 게임 상태 변수들
-  late chess_lib.Chess _game; // 체스 엔진 인스턴스
-  bool _isFlipped = false; // 보드 뒤집기 상태
-  int _selectedIndex = -1; // 현재 선택된 칸 인덱스 (0~63)
-  List<String> _validMoves = []; // 선택된 말의 이동 가능 칸 (e.g., ['e3', 'e4'])
-  String _currentFen =
-      "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq"; // 현재 포지션의 FEN 저장
-  String _getNormalizedFen(String fen) {
-    List<String> parts = fen.split(' ');
-    // 0: 기물배치, 1: 턴, 2: 캐슬링권한, 3: 앙파상타겟
-    // 뒤의 4, 5번(수치 데이터)은 오프닝 대조 시 방해가 될 수 있어 잘라냄
-    return parts.sublist(0, 3).join(' ');
-  }
+  late chess_lib.Chess _game;
+  bool _isFlipped = false;
+  int _selectedIndex = -1;
+  List<String> _validMoves = [];
+  String _currentFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq";
+
+  // [추가] 추천 수 및 아이콘 상태 변수
+  List<Map<String, dynamic>> _recommendedMoves = [];
+  String? _lastMoveType;
 
   String _nameKo = "체스 시작";
   String _nameEn = "Starting Position";
   double _eval = 0.0;
 
-  // Redo를 위한 히스토리 관리
   List<String> _fenHistory = [];
+  List<String?> _moveTypeHistory = [];
+  List<chess_lib.Move?> _moveObjectHistory = [];
+  chess_lib.Move? _lastMove;
   int _historyPointer = 0;
 
   late AudioPlayer _audioPlayer;
@@ -41,24 +40,21 @@ class _ChessBoardScreenState extends State<ChessBoardScreen> {
   @override
   void initState() {
     super.initState();
-    _initAudio(); // 오디오 초기화 분리
+    _initAudio();
     _resetGame();
+    OpeningService().loadOpenings();
   }
 
   void _initAudio() {
     _audioPlayer = AudioPlayer();
-    // 1. 저지연 모드 설정 (SFX에 필수)
     _audioPlayer.setReleaseMode(ReleaseMode.stop);
-    // 2. 윈도우에서 발생할 수 있는 이벤트 쓰레드 에러를 방지하기 위해
-    // 이벤트 스트림을 구독하지 않거나 무시하도록 설정 (내부적으로 처리)
   }
 
   Future<void> _playSfx(String fileName) async {
     try {
-      // 3. 소리가 겹칠 때 에러 방지를 위해 소스 먼저 지정 후 재생
       await _audioPlayer.play(
         AssetSource('sfx/$fileName.wav'),
-        mode: PlayerMode.lowLatency, // 저지연 모드 명시
+        mode: PlayerMode.lowLatency,
       );
     } catch (e) {
       debugPrint("Audio error: $e");
@@ -67,69 +63,74 @@ class _ChessBoardScreenState extends State<ChessBoardScreen> {
 
   Future<void> _updateOpeningInfo(String fen) async {
     final info = await DatabaseHelper().getOpeningByFen(fen);
+    final moves = await DatabaseHelper().getMovesByFen(fen);
 
-    if (info != null) {
+    if (mounted) {
       setState(() {
-        _nameKo = info['name_ko'] ?? "알 수 없는 오프닝";
-        _nameEn = info['name_en'] ?? "Unknown Opening";
-        _eval = (info['eval'] as num).toDouble();
+        if (info != null) {
+          _nameKo = info['name_ko'] ?? "알 수 없는 오프닝";
+          _nameEn = info['name_en'] ?? "Unknown Opening";
+          _eval = (info['eval'] as num).toDouble();
+        } else {
+          // DB에 없는 경우 초기화
+          _nameKo = "알 수 없는 오프닝";
+          _nameEn = "";
+          _eval = 0.0;
+        }
+        _recommendedMoves = moves;
       });
     }
   }
 
   @override
   void dispose() {
-    _audioPlayer.dispose(); // 해제 필수
+    _audioPlayer.dispose();
     super.dispose();
   }
 
-  // 게임 초기화/리셋
   void _resetGame() {
     setState(() {
-      _game = chess_lib.Chess(); // 새 게임 시작 (기본 FEN)
+      _game = chess_lib.Chess();
       _selectedIndex = -1;
       _validMoves = [];
-      _fenHistory = [_game.fen]; // 초기 상태 저장
+      _fenHistory = [_game.fen];
+      _moveTypeHistory = [null];
+      _moveObjectHistory = [null];
       _historyPointer = 0;
-      // _isFlipped는 리셋 시 유지하거나 false로 초기화 선택 가능
-      _currentFen = _getNormalizedFen(_game.fen); // 초기 FEN 저장
-      _updateOpeningInfo(_currentFen);
+      _currentFen = _getNormalizedFen(_game.fen);
+      _lastMove = null;
+      _lastMoveType = null;
+      _recommendedMoves = [];
     });
+    _updateOpeningInfo(_currentFen);
   }
 
-  // --- 보드 터치 로직 (핵심) ---
-  void _onSquareTapped(int index) {
-    // 보드가 뒤집힌 상태면 인덱스를 반대로 계산
-    final effectiveIndex = _isFlipped ? 63 - index : index;
+  String _getNormalizedFen(String fen) {
+    List<String> parts = fen.split(' ');
+    return parts.sublist(0, 3).join(' ');
+  }
 
-    // 인덱스(0~63)를 좌표 표기법(a1~h8)으로 변환
+  void _onSquareTapped(int index) {
+    final effectiveIndex = _isFlipped ? 63 - index : index;
     final rank = 8 - (effectiveIndex ~/ 8);
     final file = effectiveIndex % 8;
     final String squareName = '${String.fromCharCode(97 + file)}$rank';
 
     setState(() {
-      // 1. 이미 선택된 말을 다시 누르면 선택 취소
       if (_selectedIndex == effectiveIndex) {
         _clearSelection();
         return;
       }
 
-      // 2. 이동 가능한 칸을 눌렀다면 -> 이동 실행
       if (_validMoves.contains(squareName)) {
         _makeMove(squareName);
         return;
       }
 
-      // 3. 내 턴의 기물을 눌렀다면 -> 선택 및 이동 가능 칸 표시
       final piece = _game.get(squareName);
       if (piece != null && piece.color == _game.turn) {
         _selectedIndex = effectiveIndex;
-
-        // 'moves' 함수를 사용해야 하며, 'verbose: true'를 넣어야 Move 객체(정보 포함)를 받습니다.
         final moves = _game.moves({'square': squareName, 'verbose': true});
-
-        // 받아온 Move 객체들에서 도착지(to) 좌표만 뽑아서 리스트로 만듭니다.
-        // 해결책: Map에서 바로 'to' 키(Key)의 값을 꺼내옴
         _validMoves = moves.map((move) => move['to'] as String).toList();
       }
     });
@@ -140,12 +141,16 @@ class _ChessBoardScreenState extends State<ChessBoardScreen> {
     _validMoves = [];
   }
 
-  void _makeMove(String targetSquareName) {
+  // [핵심 수정] async 적용 및 SAN 문자열 추출 방식 변경
+  Future<void> _makeMove(String targetSquareName) async {
+    // 이동 전 FEN 저장 (DB 조회용)
+    final String prevFen = _game.fen;
+
     final rank = 8 - (_selectedIndex ~/ 8);
     final file = _selectedIndex % 8;
     final String fromSquareName = '${String.fromCharCode(97 + file)}$rank';
 
-    // 1. move()는 이동 성공 시 true를 반환합니다.
+    // 1. 실제 기물 이동 시도 (성공 시 true 반환)
     bool success = _game.move({
       'from': fromSquareName,
       'to': targetSquareName,
@@ -153,21 +158,21 @@ class _ChessBoardScreenState extends State<ChessBoardScreen> {
     });
 
     if (success) {
-      // 2. 방금 둔 수의 상세 정보는 history의 마지막 아이템에서 가져옵니다.
+      // [수정 1] State 객체에서 Move 객체 꺼내기
+      // _game.history.last는 State이고, State.move가 실제 Move 객체입니다.
       final lastMove = _game.history.last.move;
 
+      // 2. 사운드 재생 로직 (Move 객체의 flags 사용)
       if (_game.in_checkmate) {
         _playSfx('gameover');
       } else if (_game.in_check) {
         _playSfx('check');
       } else {
-        // 3. flags를 확인하여 사운드 결정
-        // chess 라이브러리에서 flags는 비트마스크(int)인 경우가 많습니다.
-        // BITS_CAPTURE = 2, BITS_EP_CAPTURE = 8, BITS_KSIDE_CASTLE = 32, BITS_QSIDE_CASTLE = 64
         final int f = lastMove.flags;
-
-        bool isCapture = (f & 2 != 0) || (f & 8 != 0); // 일반 잡기 혹은 앙파상
-        bool isCastling = (f & 32 != 0) || (f & 64 != 0); // 킹사이드 혹은 퀸사이드 캐슬링
+        // 비트 연산자로 플래그 확인 (CAPTURES, CASTLING 등)
+        bool isCapture =
+            (f & 2 != 0) || (f & 8 != 0); // BITS_CAPTURE, BITS_EP_CAPTURE
+        bool isCastling = (f & 32 != 0) || (f & 64 != 0); // K_CASTLE, Q_CASTLE
 
         if (isCapture) {
           _playSfx('capture');
@@ -178,35 +183,67 @@ class _ChessBoardScreenState extends State<ChessBoardScreen> {
         }
       }
 
-      // 히스토리 및 상태 관리 (동일)
+      // [수정 2] SAN(기보) 문자열은 별도 함수로 가져와야 함
+      // Move 객체에는 san 속성이 없으므로, san_moves() 리스트의 마지막 항목 사용
+      final String currentFen = _game.fen;
+
+      String? lastMoveSan;
+      try {
+        lastMoveSan = _game.san_moves().last?.split(' ').last;
+      } catch (e) {
+        lastMoveSan = null;
+      }
+
+      List<String> fullHistory = _game
+          .san_moves()
+          .map((s) => s.split(' ').last)
+          .toList();
+
+      // 3. DB에서 추천 수 타입 조회 (아이콘 표시용)
+      String? type;
+      if (lastMoveSan != null) {
+        await DatabaseHelper().insertLiveMove(
+          prevFen: prevFen,
+          currentFen: currentFen,
+          moveSan: lastMoveSan,
+          fullHistorySan: fullHistory,
+        );
+        type = await DatabaseHelper().getMoveType(prevFen, lastMoveSan);
+      }
+
       setState(() {
-        _currentFen = _getNormalizedFen(_game.fen); // 이동 후 FEN 갱신
+        _lastMove = lastMove;
+        _lastMoveType = type; // 아이콘 타입 업데이트
+        _currentFen = _getNormalizedFen(_game.fen);
+
+        // 히스토리 관리
         if (_historyPointer < _fenHistory.length - 1) {
           _fenHistory = _fenHistory.sublist(0, _historyPointer + 1);
+          _moveTypeHistory = _moveTypeHistory.sublist(0, _historyPointer + 1);
         }
         _fenHistory.add(_game.fen);
+        _moveTypeHistory.add(type);
+        _moveObjectHistory.add(lastMove);
         _historyPointer++;
         _clearSelection();
       });
 
+      // 오프닝 정보 및 추천 수 리스트 갱신
       _updateOpeningInfo(_currentFen);
-
-      if (_game.in_checkmate) {
-        debugPrint("Checkmate!");
-      }
     }
   }
 
-  // --- 컨트롤 버튼 기능 구현 ---
   void _undo() {
     if (_historyPointer > 0) {
       setState(() {
         _historyPointer--;
         _game.load(_fenHistory[_historyPointer]);
-        _currentFen = _getNormalizedFen(_game.fen); // FEN 동기화
-        _updateOpeningInfo(_currentFen);
+        _currentFen = _getNormalizedFen(_game.fen);
+        _lastMove = _moveObjectHistory[_historyPointer];
+        _lastMoveType = _moveTypeHistory[_historyPointer];
         _clearSelection();
       });
+      _updateOpeningInfo(_currentFen);
     }
   }
 
@@ -215,10 +252,12 @@ class _ChessBoardScreenState extends State<ChessBoardScreen> {
       setState(() {
         _historyPointer++;
         _game.load(_fenHistory[_historyPointer]);
-        _currentFen = _getNormalizedFen(_game.fen); // FEN 동기화
-        _updateOpeningInfo(_currentFen);
+        _currentFen = _getNormalizedFen(_game.fen);
+        _lastMove = _moveObjectHistory[_historyPointer];
+        _lastMoveType = _moveTypeHistory[_historyPointer];
         _clearSelection();
       });
+      _updateOpeningInfo(_currentFen);
     }
   }
 
@@ -232,17 +271,18 @@ class _ChessBoardScreenState extends State<ChessBoardScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFF161512),
       body: Column(
         children: [
-          // 상단 보드 뷰에 필요한 데이터를 모두 전달
           BoardView(
             game: _game,
             isFlipped: _isFlipped,
             selectedIndex: _selectedIndex,
             validMoves: _validMoves,
             onSquareTap: _onSquareTapped,
+            lastMove: _lastMove,
+            lastMoveType: _lastMoveType,
           ),
-          // 하단 정보 뷰에 컨트롤 콜백 전달
           InfoView(
             nameKo: _nameKo,
             nameEn: _nameEn,
@@ -254,6 +294,7 @@ class _ChessBoardScreenState extends State<ChessBoardScreen> {
             onFlip: _flipBoard,
             canUndo: _historyPointer > 0,
             canRedo: _historyPointer < _fenHistory.length - 1,
+            recommendedMoves: _recommendedMoves,
           ),
         ],
       ),
